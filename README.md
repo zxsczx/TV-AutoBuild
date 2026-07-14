@@ -1,95 +1,44 @@
 # TV AutoBuild
 
-Public GitHub Actions release builder for the maintained FongMi TV stack. It produces installable, consistently signed Mobile and Leanback release APKs from two private application repositories and two public native/runtime source repositories.
+Automated release pipeline for customized Mobile and Leanback APKs with AV3A, Dolby Vision, HEVC-FLV, and real-time AI subtitle support.
 
-## Monitored sources
+## APK variants
 
-| Component | Visibility | Branch | Build role |
-|---|---|---|---|
-| [iptvorganization/TV](https://github.com/iptvorganization/TV/tree/fongmi) | Private | `fongmi` | Android application, Mobile/Leanback UI, subtitle runtime |
-| [iptvorganization/media](https://github.com/iptvorganization/media/tree/codec-support) | Private | `codec-support` | Media3, AV3A renderer, Dolby Vision and HEVC-FLV |
-| [iptvorganization/VividLib](https://github.com/iptvorganization/VividLib) | Public | `master` | AV3A/AVS3 native decoder source |
-| [iptvorganization/sherpa-onnx](https://github.com/iptvorganization/sherpa-onnx) | Public | `master` | Java API and Android JNI speech runtime source |
+Each successful build publishes four release APKs:
 
-The source list is machine-readable in [`config/sources.json`](config/sources.json).
+- `TV-mobile-arm64-v8a.apk`
+- `TV-mobile-armeabi-v7a.apk`
+- `TV-leanback-arm64-v8a.apk`
+- `TV-leanback-armeabi-v7a.apk`
 
-`TV` and `media` are independent private repositories rather than GitHub forks. Their links return `404` to visitors without repository access. `VividLib` and `sherpa-onnx` remain public dependency forks. This builder, its workflow history, signed APK releases, build manifests, and checksums remain public.
+## Build behavior
 
-## Private source access
+- Checks for updates every 15 minutes.
+- Builds only when monitored inputs change, unless a build is forced manually.
+- Builds the speech-recognition and AV3A JNI runtimes from source for both supported ABIs.
+- Runs Mobile and Leanback unit tests before packaging.
+- Applies R8 optimization to release APKs.
+- Verifies APK signatures before publishing.
+- Publishes build metadata, exact input revisions, and SHA-256 checksums with every release.
 
-The default `GITHUB_TOKEN` issued to this public repository is scoped to `TV-AutoBuild` and cannot read the two private source repositories. Monitoring and checkout therefore require a separate Actions secret named `PRIVATE_SOURCE_TOKEN`.
-
-The token should be a fine-grained personal access token or GitHub App installation token with read-only **Contents** access to:
-
-- `iptvorganization/TV`
-- `iptvorganization/media`
-
-It does not need write access to either private repository. Signing keys, passwords, and the private-source token must remain in GitHub Actions secrets and must never be committed or printed in workflow logs.
-
-## Monitoring behavior
-
-- A scheduled workflow resolves all four branch SHAs every 15 minutes.
-- A build starts only when at least one SHA differs from the last attempted source set.
-- `workflow_dispatch` can force a build at any time.
-- `repository_dispatch` events named `source-updated` or `rebuild` provide an immediate external trigger.
-- Concurrency is serialized so two monitor events cannot publish competing releases.
-- Attempted and successful source sets are recorded separately under [`state/`](state/), preventing retry storms while preserving failure visibility.
-
-GitHub scheduled workflows can be delayed by the platform. `repository_dispatch` or the Actions **Run workflow** button is the immediate path.
-
-## What is built
-
-1. Check out all repositories at the exact monitored SHAs.
-2. Build `libsherpa-onnx-jni.so` for `arm64-v8a` and `armeabi-v7a` plus the Java API JAR directly from the monitored sherpa-onnx source. The static ONNX Runtime form keeps one JNI SO per ABI.
-3. Build `libav3aJNI.so` for both ABIs directly from the monitored VividLib source and the companion media JNI bridge. No full FFmpeg build is used.
-4. Run Mobile/Leanback application unit tests.
-5. Derive an installable CI version from the source release and GitHub run number, then build four R8 release APKs:
-   - `TV-mobile-arm64-v8a.apk`
-   - `TV-mobile-armeabi-v7a.apk`
-   - `TV-leanback-arm64-v8a.apk`
-   - `TV-leanback-armeabi-v7a.apk`
-6. Verify all four APK signatures, upload 30-day workflow artifacts, and publish a GitHub release with `SOURCE_REFS.json`, `BUILD_INFO.json`, and `SHA256SUMS.txt`.
+GitHub scheduled workflows can be delayed. Use **Actions → Monitor sources and build APKs → Run workflow** for an immediate manual build.
 
 ## Versioning
 
-The application source keeps its manually maintained functional release in `TV/version.properties`:
+Each build receives a monotonically increasing Android `versionCode` and a traceable version name:
 
-- `VERSION_CODE` is incremented for an Android feature release.
-- `VERSION_NAME` is the user-visible semantic version.
+```text
+<base-version>-autobuild.<run>+<revision>
+```
 
-The builder does not edit that source file. For each real build it passes Gradle overrides:
-
-- `versionCode = VERSION_CODE × 1,000,000 + GITHUB_RUN_NUMBER`
-- `versionName = VERSION_NAME-autobuild.<run>+<TV short SHA>`
-
-This gives each published build a higher install version and makes the exact build visible in the app settings. The effective and base versions are published in `BUILD_INFO.json`.
+This allows newer builds of the same variant to update earlier AutoBuild installations while retaining traceability.
 
 ## Signing
 
-The repository uses a dedicated persistent autobuild signing key stored only in GitHub Actions secrets:
+All APKs are signed with a persistent dedicated release key stored in GitHub Actions secrets. The private key and passwords are never committed.
 
-- `AUTOBUILD_KEYSTORE_B64`
-- `AUTOBUILD_STORE_PASSWORD`
-- `AUTOBUILD_KEY_PASSWORD`
+The public signing certificate is available as [`autobuild-signing-cert.pem`](autobuild-signing-cert.pem). Its SHA-256 certificate fingerprint is:
 
-The private key and passwords are never committed. Keeping this key stable, together with the monotonic CI `versionCode`, allows a later autobuild APK of the same ABI/product to update an earlier autobuild installation.
-
-## Manual trigger
-
-Open **Actions → Monitor sources and build APKs → Run workflow**. Leave `force_build` enabled to rebuild unchanged source SHAs.
-
-An authorized external automation can also send:
-
-```bash
-curl --request POST \
-  --header "Authorization: Bearer <token-with-TV-AutoBuild-actions-write>" \
-  --header "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/iptvorganization/TV-AutoBuild/dispatches \
-  --data '{"event_type":"source-updated"}'
+```text
+17:8A:B4:F2:5C:CC:E5:BC:B4:FA:7A:9D:38:B6:7C:7E:1F:3C:54:D2:56:D0:D2:CB:A0:6C:6E:FE:A7:10:A4:AB
 ```
-
-## Public signing certificate
-
-The public certificate is committed as [`autobuild-signing-cert.pem`](autobuild-signing-cert.pem). Its SHA-256 certificate fingerprint is:
-
-`17:8A:B4:F2:5C:CC:E5:BC:B4:FA:7A:9D:38:B6:7C:7E:1F:3C:54:D2:56:D0:D2:CB:A0:6C:6E:FE:A7:10:A4:AB`
